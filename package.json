@@ -1,0 +1,24 @@
+{
+  "name": "jarvis-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first personal memory foundation for Jarvis",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "chat": "npm run build && node dist/src/chat.js",
+    "openrouter:check": "npm run build && node dist/src/openrouter-smoke.js",
+    "openrouter:live-test": "npm run build && node dist/src/openrouter-smoke.js"
+  },
+  "dependencies": {
+    "sql.js": "^1.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/sql.js": "^1.4.9",
+    "typescript": "^5.8.3"
+  }
+}
