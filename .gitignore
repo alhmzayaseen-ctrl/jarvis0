@@ -6,3 +6,6 @@ dist/
 *.sqlite
 *.sqlite-journal
 *.sqlite-lock
+
+.continue/
+*.vsix

@@ -31,15 +31,13 @@ test("OpenRouter live task uses hidden local key input and runs only the free-ro
   const config = JSON.parse(
     readFileSync(join(process.cwd(), ".vscode", "tasks.json"), "utf8"),
   ) as TasksConfiguration;
-  const task = config.tasks.find(({ label }) => label === "Check OpenRouter connection (free only)");
+  const task = config.tasks.find(({ label }) => label === "Jarvis: OpenRouter Check (Free)");
   assert.ok(task);
 
-  assert.equal(task.type, "shell");
-  assert.equal(task.command, "npm.cmd");
-  assert.deepEqual(task.args, ["run", "openrouter:live-test"]);
+  assert.equal(task.type, "process");
+  assert.equal(task.command, "cmd.exe");
+  assert.deepEqual(task.args, ["/d", "/c", "npm.cmd run openrouter:live-test"]);
   assert.equal(task.options?.cwd, "${workspaceFolder}");
-  assert.equal(task.options?.shell?.executable, "C:\\Windows\\System32\\cmd.exe");
-  assert.deepEqual(task.options?.shell?.args, ["/d", "/c"]);
   assert.equal(task.options?.env?.OPENROUTER_API_KEY, "${input:openrouterApiKey}");
 
   const keyInput = config.inputs.find(({ id }) => id === "openrouterApiKey");
@@ -52,15 +50,13 @@ test("Jarvis chat task passes the hidden key only to the project-local chat proc
   const config = JSON.parse(
     readFileSync(join(process.cwd(), ".vscode", "tasks.json"), "utf8"),
   ) as TasksConfiguration;
-  const task = config.tasks.find(({ label }) => label === "Run Jarvis chat (free only)");
+  const task = config.tasks.find(({ label }) => label === "Jarvis: Start Chat");
   assert.ok(task);
 
-  assert.equal(task.type, "shell");
-  assert.equal(task.command, "npm.cmd");
-  assert.deepEqual(task.args, ["run", "chat"]);
+  assert.equal(task.type, "process");
+  assert.equal(task.command, "cmd.exe");
+  assert.deepEqual(task.args, ["/d", "/c", "npm.cmd run chat"]);
   assert.equal(task.options?.cwd, "${workspaceFolder}");
-  assert.equal(task.options?.shell?.executable, "C:\\Windows\\System32\\cmd.exe");
-  assert.deepEqual(task.options?.shell?.args, ["/d", "/c"]);
   assert.equal(task.options?.env?.OPENROUTER_API_KEY, "${input:openrouterApiKey}");
 
   const keyInput = config.inputs.find(({ id }) => id === "openrouterApiKey");
