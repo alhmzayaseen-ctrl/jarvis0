@@ -189,6 +189,10 @@ export interface TaskContextBuildInput {
   taskId?: string;
   shortTermMemory?: ShortTermMemory;
   workingMemory?: WorkingMemory;
+  workingMemorySnapshot?: {
+    taskId: string;
+    items: readonly WorkingMemoryItem[];
+  };
   isSensitive?: (text: string) => boolean;
   maxMemories?: number;
   maxContextChars?: number;
@@ -228,8 +232,12 @@ export class TaskContextBuilder {
       ? input.shortTermMemory.recent(input.sessionId)
           .filter((event) => !sensitive(event.content))
       : [];
-    const workingItems = input.taskId && input.workingMemory
-      ? input.workingMemory.list(input.taskId)
+    const workingItems = input.taskId
+      ? (input.workingMemorySnapshot
+          ? input.workingMemorySnapshot.taskId === input.taskId
+            ? input.workingMemorySnapshot.items
+            : []
+          : input.workingMemory?.list(input.taskId) ?? [])
           .filter((item) => !sensitive(`${item.key}\n${item.value}`))
       : [];
     const taskType = classifyTask(input.query);

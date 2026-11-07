@@ -4,6 +4,7 @@ dist/
 .env.*
 !.env.example
 *.sqlite
+jarvis.sqlite
 *.sqlite-journal
 *.sqlite-lock
 

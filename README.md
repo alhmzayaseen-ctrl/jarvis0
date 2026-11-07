@@ -16,8 +16,9 @@ npm.cmd run build
 ```
 
 `npm.cmd` avoids PowerShell execution-policy errors that can block the
-`npm.ps1` shim. The automated tests use a SQLite file in the project directory
-and remove that test database when they finish.
+`npm.ps1` shim. Memory tests use temporary SQLite databases under the operating
+system's temporary directory. They do not use the project `jarvis.sqlite` or
+open the user's personal database.
 
 ## Memory API
 
@@ -122,6 +123,18 @@ whether memories were used, unavailable, saved, corrected, or blocked.
 
 ## Terminal chat
 
+The CLI uses `~/.jarvis/jarvis.sqlite` by default. Set `JARVIS_DB_PATH` to
+choose a different database file. For example, in a POSIX shell:
+
+```sh
+JARVIS_DB_PATH="<path-to-existing-database>" npm run chat
+```
+
+Changing the default path does not move or automatically use an older
+`jarvis.sqlite` in the project directory. You are responsible for choosing the
+intended database path and keeping a backup before directing Jarvis to an older
+database.
+
 Set `OPENROUTER_API_KEY` in the environment that launches the terminal, then
 start the local chat with:
 
@@ -129,11 +142,11 @@ start the local chat with:
 npm.cmd run chat
 ```
 
-The CLI opens the existing `jarvis.sqlite` file in the project working
-directory, wires `OpenRouterProvider` and `ConversationService`, and reads one
-message per line. Enter `/exit` to leave. Existing `/remember ...` and
-`/correct ...` commands are handled by `ConversationService`; the CLI does not
-reimplement memory behavior. Missing credentials fail before opening memory.
+The CLI opens the database at the selected path, wires `OpenRouterProvider` and
+`ConversationService`, and reads one message per line. Enter `/exit` to leave.
+Existing `/remember ...` and `/correct ...` commands are handled by
+`ConversationService`; the CLI does not reimplement memory behavior. Missing
+credentials fail before opening memory.
 Provider and memory failures are displayed without printing raw errors or
 secrets. Automated CLI tests use in-memory mocks and do not send network
 requests.
@@ -176,8 +189,10 @@ These are runtime foundations, not the complete long-term architecture.
 Persistent short-term/event storage, confidence/importance/validity metadata,
 memory relationships, a durable local knowledge base, a persistent
 consolidation review queue, and versioned persistent skills have not been
-implemented. The current SQLite schema
-remains unchanged; no migration is run. Sleep-time analysis must remain a
+implemented. There is no general migration framework. The schema initializer
+creates the `tasks` and `task_events` tables, and adds and backfills the
+`sequence` column when it detects an older `task_events` table without that
+column. Sleep-time analysis must remain a
 bounded local proposal/review process and must not edit confirmed memories
 automatically. No background job, model call, or network activity is started
 by these foundations.

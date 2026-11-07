@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { afterEach, test } from "node:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createChatService,
   DEFAULT_MEMORY_PATH,
@@ -16,6 +21,7 @@ import type { AIProvider, AIRequest } from "../src/provider";
 import {
   OPENROUTER_FREE_ROUTER,
   OpenRouterConfigurationError,
+  OpenRouterError,
   OpenRouterProvider,
 } from "../src/openrouter";
 
@@ -237,8 +243,53 @@ test("shows safe provider errors and continues without leaking provider details"
   await runChat(lines(), service, (text) => output.push(text));
 
   assert.ok(output.some((text) => text.includes("تعذر إكمال الطلب")));
+  assert.equal(output.some((text) => text.includes("تحقق من حالة الذاكرة المحلية")), false);
   assert.equal(output.some((text) => text.includes(secret)), false);
   assert.match(output.at(-1) ?? "", /إلى اللقاء/);
+});
+
+test("does not display the original OpenRouterError message", async () => {
+  const originalMessage = "TEST_PROVIDER_ERROR_SENTINEL";
+  const service: Pick<ConversationService, "respond"> = {
+    respond: async () => {
+      throw new OpenRouterError(originalMessage);
+    },
+  };
+  const output: string[] = [];
+  const lines = async function* (): AsyncGenerator<string> {
+    yield "Hello";
+    yield "/exit";
+  };
+
+  await runChat(lines(), service, (text) => output.push(text));
+
+  assert.ok(output.some((text) => text.includes("تعذر الاتصال بمزود الذكاء الاصطناعي")));
+  assert.equal(output.some((text) => text.includes(originalMessage)), false);
+});
+
+test("hides OpenRouter configuration details when application startup fails", () => {
+  const memoryPath = join(tmpdir(), `jarvis-startup-test-${randomUUID()}.sqlite`);
+  const env: NodeJS.ProcessEnv = { ...process.env, JARVIS_DB_PATH: memoryPath };
+  delete env.OPENROUTER_API_KEY;
+
+  const result = spawnSync(
+    process.execPath,
+    [join(__dirname, "..", "src", "chat.js")],
+    { encoding: "utf8", env, timeout: 5_000 },
+  );
+
+  assert.equal(result.error, undefined, "chat process must start and exit normally");
+  assert.notEqual(result.status, 0, "missing OpenRouter configuration must fail startup");
+  assert.match(
+    result.stderr,
+    /تعذر تهيئة مزود الذكاء الاصطناعي\. تحقق من الإعدادات وحاول مجدداً\./,
+  );
+  assert.doesNotMatch(
+    result.stderr,
+    /OPENROUTER_API_KEY|Set .*local environment/,
+    "startup output must not include the original provider error",
+  );
+  assert.equal(existsSync(memoryPath), false, "provider setup must fail before opening memory");
 });
 
 function restoreEnvironment(name: string, value: string | undefined): void {

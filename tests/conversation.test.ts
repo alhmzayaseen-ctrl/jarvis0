@@ -345,6 +345,57 @@ test("does not save uncertain claims, assumptions, or ordinary conversation auto
   assert.equal(requestsFor(provider).length, 1);
 });
 
+test("returns and stores an ordinary provider response", async () => {
+  const providerOutput = "A normal response.";
+  const provider = createMockProvider(providerOutput);
+  const shortTermMemory = new ShortTermMemory();
+  const sessionId = "ordinary-response-session";
+  const service = new ConversationService(provider, new MockMemory(), {
+    sessionId,
+    shortTermMemory,
+  });
+
+  const result = await service.respond("Summarize the current project status.");
+
+  assert.ok(result.text === providerOutput, "ordinary response must reach the caller unchanged");
+  assert.equal(result.memoryStatus, "none", "empty memory must report none");
+  assert.ok(
+    shortTermMemory.recent(sessionId).some(
+      (event) => event.role === "assistant" && event.content === providerOutput,
+    ),
+    "ordinary response must be stored in short-term memory",
+  );
+});
+
+test("blocks a sensitive provider response without returning or storing it", async () => {
+  const providerOutput = `API key is ${"x".repeat(24)}`;
+  const provider = createMockProvider(providerOutput);
+  const shortTermMemory = new ShortTermMemory();
+  const sessionId = "sensitive-response-session";
+  const service = new ConversationService(provider, new MockMemory(), {
+    sessionId,
+    shortTermMemory,
+  });
+
+  const result = await service.respond("Summarize the current project status.");
+
+  assert.ok(
+    result.text === "تعذر عرض الرد لأسباب تتعلق بالخصوصية.",
+    "sensitive response must be replaced with the generic refusal",
+  );
+  assert.equal(result.memoryStatus, "privacy-blocked", "sensitive response must be privacy-blocked");
+  assert.ok(
+    shortTermMemory.recent(sessionId).some((event) => event.role === "user"),
+    "user message must remain stored even when the response is blocked",
+  );
+  assert.ok(
+    shortTermMemory.recent(sessionId).every(
+      (event) => event.role !== "assistant" || event.content !== providerOutput,
+    ),
+    "sensitive provider response must not be stored",
+  );
+});
+
 test("blocks secrets and sensitive content, including sensitive stored memories", async () => {
   const memory = new MockMemory();
   await memory.create({
@@ -406,7 +457,7 @@ test("blocks detected sensitive messages before memory retrieval, context, or pr
     "أعاني من السكري",
   ]) {
     const result = await service.respond(message);
-    assert.equal(result.memoryStatus, "privacy-blocked", message);
+    assert.equal(result.memoryStatus, "privacy-blocked", "sensitive input must be blocked");
   }
 
   assert.equal(memory.searchCalls, 0);
@@ -435,13 +486,32 @@ test("blocks sensitive remember and correction commands before changing memory",
     "/correct preferred-language = Ik heb diabetes",
   ]) {
     const result = await service.respond(command);
-    assert.equal(result.memoryStatus, "privacy-blocked", command);
+    assert.equal(result.memoryStatus, "privacy-blocked", "sensitive memory command must be blocked");
   }
 
   assert.equal(memory.createCalls, 0);
   assert.equal(memory.updateCalls, 0);
   assert.equal(memory.records.get("preferred-language")?.value, "English");
   assert.equal(memory.searchCalls, 0);
+  assert.equal(requestsFor(provider).length, 0);
+});
+
+test("blocks sensitive unsupported and invalid remember commands before parsing", async () => {
+  const provider = createMockProvider();
+  const memory = new MockMemory();
+  const service = new ConversationService(provider, memory);
+
+  for (const command of [
+    "/remember task password = example-secret",
+    "/remember password is example-secret",
+  ]) {
+    const result = await service.respond(command);
+    assert.equal(result.memoryStatus, "privacy-blocked");
+  }
+
+  assert.equal(memory.searchCalls, 0);
+  assert.equal(memory.createCalls, 0);
+  assert.equal(memory.updateCalls, 0);
   assert.equal(requestsFor(provider).length, 0);
 });
 
@@ -471,6 +541,28 @@ test("continues with the original user message when memory retrieval fails", asy
   assert.equal(result.memoryStatus, "unavailable");
   assert.equal(requestsFor(provider)[0].prompt, "Please explain photosynthesis.");
   assert.match(requestsFor(provider)[0].context ?? "", /No relevant stored memories were retrieved/);
+});
+
+test("keeps working memory task-isolated when memory retrieval fails", async () => {
+  const memory = new MockMemory();
+  memory.searchFailure = new Error("local database unavailable");
+  const provider = createMockProvider();
+  const workingMemory = new WorkingMemory();
+  workingMemory.set("task-one", "progress", "TASK_ONE_MARKER");
+  workingMemory.set("task-two", "progress", "TASK_TWO_MARKER");
+  const service = new ConversationService(provider, memory, {
+    taskId: "task-one",
+    workingMemory,
+  });
+
+  const result = await service.respond("What should I do next?");
+  const requests = requestsFor(provider);
+  const context = requests[0]?.context ?? "";
+
+  assert.equal(result.memoryStatus, "unavailable");
+  assert.equal(requests.length, 1);
+  assert.ok(context.includes("TASK_ONE_MARKER"));
+  assert.ok(!context.includes("TASK_TWO_MARKER"));
 });
 
 test("sanitizes provider failures and emits no key-bearing logs", async () => withMockFetch(async () => {

@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
+  chmodSync,
   existsSync,
+  fchmodSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -10,7 +13,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { homedir } from "node:os";
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
 
 export const MEMORY_KINDS = ["fact", "goal", "project", "decision"] as const;
@@ -32,6 +36,44 @@ export interface MemoryRecord extends MemoryInput {
 
 export interface MemoryRevision extends MemoryRecord {
   revision: number;
+}
+
+export const TASK_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+export interface TaskInput {
+  title: string;
+  description?: string | null;
+  status: TaskStatus;
+}
+
+export interface TaskUpdateInput {
+  title?: string;
+  description?: string | null;
+}
+
+export interface TaskRecord extends TaskInput {
+  id: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskEventInput {
+  id?: string;
+  taskId: string;
+  eventType: string;
+  content?: string | null;
+  status?: TaskStatus;
+  expectedStatus?: TaskStatus;
+}
+
+export interface TaskEventRecord {
+  id: string;
+  taskId: string;
+  eventType: string;
+  content: string | null;
+  createdAt: string;
 }
 
 export class MemoryConflictError extends Error {
@@ -103,13 +145,56 @@ const SEMANTIC_MATCH_RULES = [
 ] as const;
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+function assertNoSymbolicLinkComponents(rootDirectory: string, targetDirectory: string): void {
+  let currentPath = rootDirectory;
+  const components = relative(rootDirectory, targetDirectory).split(sep).filter(Boolean);
+  for (const path of [rootDirectory, ...components.map((component) => (currentPath = join(currentPath, component)))]) {
+    let stats: ReturnType<typeof lstatSync>;
+    try {
+      stats = lstatSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (stats.isSymbolicLink()) {
+      throw new Error("Jarvis database path must not contain symbolic links.");
+    }
+  }
+}
+
 export class MemoryStore {
   private static sqlPromise?: Promise<SqlJsStatic>;
 
-  private constructor(private readonly filePath: string) {}
+  private constructor(
+    private readonly filePath: string,
+    private readonly jarvisDirectory?: string,
+  ) {}
 
   static async open(filePath: string): Promise<MemoryStore> {
-    const store = new MemoryStore(filePath);
+    const jarvisDirectory = resolve(join(homedir(), ".jarvis"));
+    const resolvedFilePath = resolve(filePath);
+    const pathFromJarvisDirectory = relative(jarvisDirectory, resolvedFilePath);
+    const isInsideJarvisDirectory =
+      pathFromJarvisDirectory !== "" &&
+      pathFromJarvisDirectory !== ".." &&
+      !pathFromJarvisDirectory.startsWith(`..${sep}`);
+    if (isInsideJarvisDirectory) {
+      assertNoSymbolicLinkComponents(jarvisDirectory, dirname(resolvedFilePath));
+    }
+    mkdirSync(dirname(filePath), { recursive: true });
+    if (isInsideJarvisDirectory) {
+      assertNoSymbolicLinkComponents(jarvisDirectory, dirname(resolvedFilePath));
+      const directoryStat = lstatSync(jarvisDirectory);
+      if (!directoryStat.isDirectory()) throw new Error("Jarvis data directory must be a directory.");
+      chmodSync(jarvisDirectory, 0o700);
+    }
+    if (existsSync(filePath)) {
+      if (lstatSync(filePath).isSymbolicLink()) {
+        throw new Error("SQLite database path must not be a symbolic link.");
+      }
+      chmodSync(filePath, 0o600);
+    }
+    const store = new MemoryStore(filePath, isInsideJarvisDirectory ? jarvisDirectory : undefined);
     await store.withDatabase(true, () => undefined);
     return store;
   }
@@ -229,6 +314,129 @@ export class MemoryStore {
     });
   }
 
+  async createTask(input: TaskInput): Promise<TaskRecord> {
+    this.validateTaskInput(input);
+    return this.withDatabase(true, (db) => {
+      const now = new Date().toISOString();
+      const task: TaskRecord = {
+        id: randomUUID(),
+        title: input.title,
+        description: input.description ?? null,
+        status: input.status,
+        createdAt: now,
+        updatedAt: now,
+      };
+      db.run(
+        "INSERT INTO tasks (id, title, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        [task.id, task.title, task.description, task.status, task.createdAt, task.updatedAt],
+      );
+      return task;
+    });
+  }
+
+  async getTask(id: string): Promise<TaskRecord | null> {
+    return this.withDatabase(false, (db) => this.selectTask(db, id));
+  }
+
+  async updateTask(id: string, input: TaskUpdateInput): Promise<TaskRecord> {
+    if ("status" in input) {
+      throw new Error("Use addTaskEvent to change task status.");
+    }
+    if (input.title === undefined && input.description === undefined) {
+      throw new Error("At least one task field must be updated.");
+    }
+    if (input.title !== undefined) this.validateTaskTitle(input.title);
+
+    return this.withDatabase(true, (db) => {
+      const current = this.selectTask(db, id);
+      if (!current) throw new Error("Task not found.");
+      const updated: TaskRecord = {
+        ...current,
+        title: input.title ?? current.title,
+        description: input.description === undefined ? current.description : input.description,
+        updatedAt: new Date().toISOString(),
+      };
+      db.run(
+        "UPDATE tasks SET title = ?, description = ?, updated_at = ? WHERE id = ?",
+        [updated.title, updated.description, updated.updatedAt, id],
+      );
+      return updated;
+    });
+  }
+
+  async addTaskEvent(input: TaskEventInput): Promise<TaskEventRecord> {
+    if (!input.taskId.trim()) throw new Error("Task ID must not be empty.");
+    if (!input.eventType.trim()) throw new Error("Task event type must not be empty.");
+    if (input.status !== undefined) this.validateTaskStatus(input.status);
+    if (input.expectedStatus !== undefined) this.validateTaskStatus(input.expectedStatus);
+
+    return this.withDatabase(true, (db) => {
+      const task = this.selectTask(db, input.taskId);
+      if (!task) throw new Error("Task not found.");
+      if (input.expectedStatus !== undefined && task.status !== input.expectedStatus) {
+        throw new Error(
+          `Task status changed: expected ${input.expectedStatus}, found ${task.status}.`,
+        );
+      }
+      const now = new Date().toISOString();
+      const event: TaskEventRecord = {
+        id: input.id ?? randomUUID(),
+        taskId: input.taskId,
+        eventType: input.eventType,
+        content: input.content ?? null,
+        createdAt: now,
+      };
+      const sequenceStatement = db.prepare(
+        "SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM task_events",
+      );
+      let sequence: number;
+      try {
+        sequenceStatement.step();
+        sequence = Number(sequenceStatement.getAsObject().sequence);
+      } finally {
+        sequenceStatement.free();
+      }
+      db.run(
+        "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
+        [input.status ?? task.status, now, task.id],
+      );
+      db.run(
+        "INSERT INTO task_events (sequence, id, task_id, event_type, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        [sequence, event.id, event.taskId, event.eventType, event.content, event.createdAt],
+      );
+      return event;
+    });
+  }
+
+  async listTaskEvents(taskId: string): Promise<TaskEventRecord[]> {
+    return this.withDatabase(false, (db) => {
+      const statement = db.prepare(
+        "SELECT id, task_id, event_type, content, created_at FROM task_events WHERE task_id = ? ORDER BY sequence ASC",
+      );
+      statement.bind([taskId]);
+      const events: TaskEventRecord[] = [];
+      try {
+        while (statement.step()) events.push(this.toTaskEvent(statement.getAsObject()));
+      } finally {
+        statement.free();
+      }
+      return events;
+    });
+  }
+
+  private validateTaskInput(input: TaskInput): void {
+    this.validateTaskTitle(input.title);
+    this.validateTaskStatus(input.status);
+  }
+
+  private validateTaskTitle(title: string): void {
+    if (!title.trim()) throw new Error("Task title must not be empty.");
+  }
+
+  private validateTaskStatus(status: TaskStatus): void {
+    if (!TASK_STATUSES.includes(status)) throw new Error("Unsupported task status.");
+  }
+
   private validate(input: MemoryInput): void {
     if (!MEMORY_KINDS.includes(input.kind)) throw new Error(`Unsupported memory kind: ${input.kind}`);
     for (const field of ["key", "value", "provenance"] as const) {
@@ -237,6 +445,7 @@ export class MemoryStore {
   }
 
   private async withDatabase<T>(write: boolean, action: (db: Database) => T): Promise<T> {
+    this.assertJarvisPathSafe();
     const lockPath = `${this.filePath}.lock`;
     const lock = write ? await this.acquireLock(lockPath) : undefined;
     let db: Database | undefined;
@@ -252,7 +461,9 @@ export class MemoryStore {
       if (write) {
         const bytes = Buffer.from(db.export());
         tempPath = join(dirname(this.filePath), `.${basename(this.filePath)}.${randomUUID()}.pending`);
-        writeFileSync(tempPath, bytes);
+        this.assertJarvisPathSafe();
+        writeFileSync(tempPath, bytes, { mode: 0o600 });
+        chmodSync(tempPath, 0o600);
         renameSync(tempPath, this.filePath);
         tempPath = undefined;
       }
@@ -274,14 +485,30 @@ export class MemoryStore {
   }
 
   private async acquireLock(lockPath: string): Promise<{ fd: number; token: string }> {
+    this.assertJarvisPathSafe();
     mkdirSync(dirname(this.filePath), { recursive: true });
     const deadline = Date.now() + LOCK_TIMEOUT_MS;
     while (true) {
       try {
-        const fd = openSync(lockPath, "wx");
+        const fd = openSync(lockPath, "wx", 0o600);
         const token = randomUUID();
-        writeFileSync(fd, JSON.stringify({ createdAt: Date.now(), pid: process.pid, token }));
-        return { fd, token };
+        try {
+          fchmodSync(fd, 0o600);
+          writeFileSync(fd, JSON.stringify({ createdAt: Date.now(), pid: process.pid, token }));
+          return { fd, token };
+        } catch (error) {
+          try {
+            closeSync(fd);
+          } catch {
+            // Preserve the original lock setup error.
+          }
+          try {
+            unlinkSync(lockPath);
+          } catch {
+            // Ignore cleanup failure and preserve the original lock setup error.
+          }
+          throw error;
+        }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         try {
@@ -312,6 +539,14 @@ export class MemoryStore {
     }
   }
 
+  private assertJarvisPathSafe(): void {
+    if (!this.jarvisDirectory) return;
+    assertNoSymbolicLinkComponents(this.jarvisDirectory, dirname(resolve(this.filePath)));
+    if (existsSync(this.filePath) && lstatSync(this.filePath).isSymbolicLink()) {
+      throw new Error("SQLite database path must not be a symbolic link.");
+    }
+  }
+
   private isProcessAlive(pid: number): boolean {
     try {
       process.kill(pid, 0);
@@ -322,6 +557,7 @@ export class MemoryStore {
   }
 
   private initializeSchema(db: Database): void {
+    db.run("PRAGMA foreign_keys = ON;");
     db.run(`
       CREATE TABLE IF NOT EXISTS memories (
         id TEXT PRIMARY KEY,
@@ -344,7 +580,57 @@ export class MemoryStore {
         updated_at TEXT NOT NULL,
         PRIMARY KEY (id, version)
       );
+      CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'in_progress', 'completed', 'cancelled')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS task_events (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        task_id TEXT NOT NULL REFERENCES tasks(id),
+        event_type TEXT NOT NULL,
+        content TEXT,
+        created_at TEXT NOT NULL
+      );
     `);
+    this.ensureTaskEventSequence(db);
+  }
+
+  private ensureTaskEventSequence(db: Database): void {
+    const columns = db.prepare("PRAGMA table_info(task_events)");
+    let hasSequence = false;
+    try {
+      while (columns.step()) {
+        if (columns.getAsObject().name === "sequence") hasSequence = true;
+      }
+    } finally {
+      columns.free();
+    }
+
+    if (!hasSequence) {
+      db.run("ALTER TABLE task_events ADD COLUMN sequence INTEGER");
+      const events = db.prepare("SELECT id FROM task_events ORDER BY rowid ASC");
+      const ids: string[] = [];
+      try {
+        while (events.step()) ids.push(String(events.getAsObject().id));
+      } finally {
+        events.free();
+      }
+      const update = db.prepare("UPDATE task_events SET sequence = ? WHERE id = ?");
+      try {
+        ids.forEach((id, index) => update.run([index + 1, id]));
+      } finally {
+        update.free();
+      }
+    }
+
+    db.run(
+      "CREATE UNIQUE INDEX IF NOT EXISTS task_events_sequence_unique ON task_events(sequence)",
+    );
   }
 
   private selectRecord(db: Database, key: string): MemoryRecord | null {
@@ -353,6 +639,37 @@ export class MemoryStore {
     const result = statement.step() ? this.toRecord(statement.getAsObject()) : null;
     statement.free();
     return result;
+  }
+
+  private selectTask(db: Database, id: string): TaskRecord | null {
+    const statement = db.prepare("SELECT * FROM tasks WHERE id = ?");
+    statement.bind([id]);
+    try {
+      return statement.step() ? this.toTask(statement.getAsObject()) : null;
+    } finally {
+      statement.free();
+    }
+  }
+
+  private toTask(row: Record<string, unknown>): TaskRecord {
+    return {
+      id: String(row.id),
+      title: String(row.title),
+      description: row.description === null ? null : String(row.description),
+      status: String(row.status) as TaskStatus,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private toTaskEvent(row: Record<string, unknown>): TaskEventRecord {
+    return {
+      id: String(row.id),
+      taskId: String(row.task_id),
+      eventType: String(row.event_type),
+      content: row.content === null ? null : String(row.content),
+      createdAt: String(row.created_at),
+    };
   }
 
   private insertHistory(db: Database, record: MemoryRecord): void {

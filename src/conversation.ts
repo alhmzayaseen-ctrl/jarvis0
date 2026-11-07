@@ -3,6 +3,7 @@ import {
   ShortTermMemory,
   TaskContextBuilder,
   WorkingMemory,
+  type WorkingMemoryItem,
   type TaskType,
 } from "./context";
 import { HybridModelRouter } from "./model-router";
@@ -65,6 +66,7 @@ export interface ConversationResult {
 export interface ConversationOptions {
   sessionId?: string;
   taskId?: string;
+  getTaskId?: () => string | null | undefined;
   shortTermMemory?: ShortTermMemory;
   workingMemory?: WorkingMemory;
   contextBuilder?: TaskContextBuilder;
@@ -95,6 +97,24 @@ export class ConversationService {
 
   async respond(message: string): Promise<ConversationResult> {
     if (!message.trim()) throw new Error("Message must not be empty.");
+    const taskId = this.options.getTaskId
+      ? this.options.getTaskId() ?? undefined
+      : this.options.taskId;
+    const workingMemorySnapshot =
+      taskId && this.options.workingMemory
+        ? {
+            taskId,
+            items: this.options.workingMemory.list(taskId).map((item) => ({ ...item })),
+          }
+        : undefined;
+
+    const sensitiveMessage = containsSensitiveContent(message);
+    if (sensitiveMessage) {
+      return {
+        text: "لم أرسل هذه الرسالة إلى مزود الذكاء الاصطناعي ولم أحفظها؛ قد تتضمن معلومات حساسة أو سراً.",
+        memoryStatus: "privacy-blocked",
+      };
+    }
 
     const operation = parseMemoryOperation(message);
     if (operation?.type === "unsupported") {
@@ -107,14 +127,6 @@ export class ConversationService {
       return {
         text: "صيغة الحفظ غير مكتملة. استخدم /remember key = value أو /remember fact key = value أو /remember preference key = value.",
         memoryStatus: "clarification-needed",
-      };
-    }
-
-    const sensitiveMessage = containsSensitiveContent(message);
-    if (sensitiveMessage) {
-      return {
-        text: "لم أرسل هذه الرسالة إلى مزود الذكاء الاصطناعي ولم أحفظها؛ قد تتضمن معلومات حساسة أو سراً.",
-        memoryStatus: "privacy-blocked",
       };
     }
 
@@ -131,9 +143,10 @@ export class ConversationService {
         baseInstructions: SYSTEM_CONTEXT,
         searchMemories: (query, limit) => this.memory.search(query, limit),
         sessionId: this.sessionId,
-        taskId: this.options.taskId,
+        taskId,
         shortTermMemory: this.shortTermMemory,
         workingMemory: this.options.workingMemory,
+        workingMemorySnapshot,
         isSensitive: containsSensitiveContent,
         maxMemories: MAX_CONTEXT_MEMORIES,
       });
@@ -148,7 +161,10 @@ export class ConversationService {
         baseInstructions: SYSTEM_CONTEXT,
         searchMemories: async () => [],
         sessionId: this.sessionId,
+        taskId,
         shortTermMemory: this.shortTermMemory,
+        workingMemory: this.options.workingMemory,
+        workingMemorySnapshot,
         isSensitive: containsSensitiveContent,
         maxMemories: MAX_CONTEXT_MEMORIES,
       }).then(({ text, taskType: fallbackTaskType }) => {
@@ -166,7 +182,13 @@ export class ConversationService {
       taskType,
       privacyLevel: sensitiveMessage ? "sensitive" : "normal",
     });
-    if (!sensitiveMessage && !containsSensitiveContent(text)) {
+    if (containsSensitiveContent(text)) {
+      return {
+        text: "تعذر عرض الرد لأسباب تتعلق بالخصوصية.",
+        memoryStatus: "privacy-blocked",
+      };
+    }
+    if (!sensitiveMessage) {
       this.shortTermMemory.append(this.sessionId, "assistant", text);
     }
     return {
