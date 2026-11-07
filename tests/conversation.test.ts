@@ -413,7 +413,7 @@ test("blocks secrets and sensitive content, including sensitive stored memories"
   const provider = createMockProvider();
   const service = new ConversationService(provider, memory);
 
-  const secret = await service.respond("My API key is sk-or-v1-1234567890abcdefghijkl");
+  const secret = await service.respond("My API key is sk-or-test-placeholder-not-a-real-key");
   const health = await service.respond("I need help with my diagnosis.");
   const memoryAnswer = await service.respond("What is my preferred work language?");
 
