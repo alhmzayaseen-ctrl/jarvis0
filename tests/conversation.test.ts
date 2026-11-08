@@ -541,6 +541,28 @@ test("continues with the original user message when memory retrieval fails", asy
   assert.equal(result.memoryStatus, "unavailable");
   assert.equal(requestsFor(provider)[0].prompt, "Please explain photosynthesis.");
   assert.match(requestsFor(provider)[0].context ?? "", /No relevant stored memories were retrieved/);
+  assert.match(requestsFor(provider)[0].context ?? "", /Memory retrieval is currently unavailable\.$/);
+  assert.ok((requestsFor(provider)[0].context ?? "").length <= 8_000);
+});
+
+test("enforces configured maxContextChars in fallback when memory retrieval fails", async () => {
+  const memory = new MockMemory();
+  memory.searchFailure = new Error("local database unavailable");
+  const provider = createMockProvider();
+
+  const service = new ConversationService(provider, memory, {
+    maxContextChars: 870,
+  });
+
+  const result = await service.respond("Please explain photosynthesis.");
+
+  assert.equal(result.memoryStatus, "unavailable");
+  const capturedContext = requestsFor(provider)[0].context ?? "";
+  assert.match(capturedContext, /Memory retrieval is currently unavailable\.$/);
+  assert.ok(
+    capturedContext.length <= 870,
+    `Context length ${capturedContext.length} exceeded configured budget 870`,
+  );
 });
 
 test("keeps working memory task-isolated when memory retrieval fails", async () => {

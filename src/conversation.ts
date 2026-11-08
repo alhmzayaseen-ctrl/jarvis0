@@ -70,6 +70,7 @@ export interface ConversationOptions {
   shortTermMemory?: ShortTermMemory;
   workingMemory?: WorkingMemory;
   contextBuilder?: TaskContextBuilder;
+  maxContextChars?: number;
 }
 
 export class ConversationService {
@@ -137,6 +138,7 @@ export class ConversationService {
     let memoryIdsUsed: string[] = [];
     let taskType: TaskType | undefined;
     let memoryStatus: ConversationMemoryStatus = "none";
+    const maxChars = this.options.maxContextChars ?? 8_000;
     try {
       const taskContext = await this.contextBuilder.build({
         query: message,
@@ -149,6 +151,7 @@ export class ConversationService {
         workingMemorySnapshot,
         isSensitive: containsSensitiveContent,
         maxMemories: MAX_CONTEXT_MEMORIES,
+        maxContextChars: maxChars,
       });
       context = taskContext.text;
       memoryIdsUsed = taskContext.memoryIds;
@@ -156,6 +159,7 @@ export class ConversationService {
       if (taskContext.memoryCount > 0) memoryStatus = "used";
     } catch {
       memoryStatus = "unavailable";
+      const fallbackNotice = " Memory retrieval is currently unavailable.";
       context = await this.contextBuilder.build({
         query: message,
         baseInstructions: SYSTEM_CONTEXT,
@@ -167,9 +171,12 @@ export class ConversationService {
         workingMemorySnapshot,
         isSensitive: containsSensitiveContent,
         maxMemories: MAX_CONTEXT_MEMORIES,
+        maxContextChars: maxChars,
       }).then(({ text, taskType: fallbackTaskType }) => {
         taskType = fallbackTaskType;
-        return `${text} Memory retrieval is currently unavailable.`;
+        const remainingBudget = maxChars - fallbackNotice.length;
+        const trimmedBase = text.length > remainingBudget ? text.slice(0, remainingBudget).trimEnd() : text;
+        return `${trimmedBase}${fallbackNotice}`;
       });
     }
 
