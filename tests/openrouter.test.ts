@@ -45,6 +45,13 @@ test("uses the free router by default and sends the key only as a bearer header"
     max_tokens: 256,
   });
   assert.equal(String(capturedInit?.body).includes("local-test-key"), false);
+
+  // ADD-05: Ensure apiKey does not leak through JSON serialization, util.inspect, or enumerable properties
+  const inspected = (await import("node:util")).inspect(provider);
+  assert.equal(inspected.includes("local-test-key"), false);
+  const serialized = JSON.stringify(provider);
+  assert.equal(serialized.includes("local-test-key"), false);
+  assert.deepEqual(Object.keys(provider), []);
 }));
 
 test("always sends requests through the OpenRouter free router", async () => withMockFetch(async () => {

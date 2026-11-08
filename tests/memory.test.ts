@@ -657,6 +657,48 @@ test("task storage does not change existing memory records or history", async ()
   });
 });
 
+test("deletes memory and associated revision history while preserving unrelated records and tasks", async () => {
+  await withTemporaryTaskStore(async (store, databasePath) => {
+    const target = await store.create({
+      kind: "fact",
+      key: "target-memory",
+      value: "target value",
+      provenance: "user",
+    });
+    await store.update("target-memory", target.version, {
+      kind: "fact",
+      key: "target-memory",
+      value: "updated target value",
+      provenance: "user correction",
+    });
+
+    const unrelated = await store.create({
+      kind: "fact",
+      key: "unrelated-memory",
+      value: "unrelated value",
+      provenance: "system",
+    });
+
+    const task = await store.createTask({ title: "Keep this task", status: "pending" });
+
+    assert.equal((await store.history("target-memory")).length, 2);
+    assert.equal(await store.delete("target-memory"), true);
+    assert.equal(await store.delete("target-memory"), false);
+
+    assert.equal(await store.get("target-memory"), null);
+    assert.deepEqual(await store.history("target-memory"), []);
+
+    assert.deepEqual(await store.get("unrelated-memory"), unrelated);
+    assert.equal((await store.history("unrelated-memory")).length, 1);
+
+    const reopened = await MemoryStore.open(databasePath);
+    assert.equal(await reopened.get("target-memory"), null);
+    assert.deepEqual(await reopened.history("target-memory"), []);
+    assert.deepEqual(await reopened.get("unrelated-memory"), unrelated);
+    assert.equal((await reopened.getTask(task.id))?.title, "Keep this task");
+  });
+});
+
 async function withTemporaryTaskStore<T>(
   action: (store: MemoryStore, databasePath: string) => Promise<T>,
 ): Promise<T> {

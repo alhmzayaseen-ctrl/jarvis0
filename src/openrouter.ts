@@ -30,12 +30,33 @@ export interface OpenRouterProviderOptions {
 const TRUSTED_PROVIDERS = new WeakSet<OpenRouterProvider>();
 
 export class OpenRouterProvider implements AIProvider {
+  readonly #apiKey: string;
+  readonly #model: string;
+  readonly #timeoutMs: number;
+
   private constructor(
-    private readonly apiKey: string,
-    private readonly model: string,
-    private readonly timeoutMs: number,
+    apiKey: string,
+    model: string,
+    timeoutMs: number,
   ) {
+    this.#apiKey = apiKey;
+    this.#model = model;
+    this.#timeoutMs = timeoutMs;
     Object.freeze(this);
+  }
+
+  [Symbol.for("nodejs.util.inspect.custom")](): Record<string, unknown> {
+    return {
+      model: this.#model,
+      timeoutMs: this.#timeoutMs,
+    };
+  }
+
+  toJSON(): Record<string, unknown> {
+    return {
+      model: this.#model,
+      timeoutMs: this.#timeoutMs,
+    };
   }
 
   static isTrustedProvider(value: unknown): value is OpenRouterProvider {
@@ -84,16 +105,16 @@ export class OpenRouterProvider implements AIProvider {
     messages.push({ role: "user", content: request.prompt });
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
     try {
       const response = await globalThis.fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
         method: "POST",
         redirect: "error",
         headers: {
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${this.#apiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ model: this.model, messages, max_tokens: MAX_COMPLETION_TOKENS }),
+        body: JSON.stringify({ model: this.#model, messages, max_tokens: MAX_COMPLETION_TOKENS }),
         signal: controller.signal,
       });
 

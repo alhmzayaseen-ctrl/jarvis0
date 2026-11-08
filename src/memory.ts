@@ -265,6 +265,18 @@ export class MemoryStore {
     });
   }
 
+  async delete(key: string): Promise<boolean> {
+    if (!key.trim()) throw new Error("Key must not be empty.");
+    return this.withDatabase(true, (db) => {
+      const current = this.selectRecord(db, key);
+      if (!current) return false;
+
+      db.run("DELETE FROM memory_history WHERE key = ? OR id = ?", [key, current.id]);
+      db.run("DELETE FROM memories WHERE key = ?", [key]);
+      return true;
+    });
+  }
+
   async create(input: MemoryInput): Promise<MemoryRecord> {
     this.validate(input);
     return this.withDatabase(true, (db) => {
