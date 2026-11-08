@@ -10,6 +10,7 @@ import {
   OpenRouterConfigurationError,
   OpenRouterError,
   OpenRouterProvider,
+  OpenRouterTokenLimitError,
 } from "./openrouter";
 import type { AIProvider } from "./provider";
 
@@ -233,6 +234,12 @@ function formatResult(result: ConversationResult): string {
 }
 
 function formatError(error: unknown): string {
+  if (error instanceof OpenRouterConfigurationError) {
+    return "Jarvis: إعداد مزود الذكاء الاصطناعي غير مكتمل. تحقق من متغيرات البيئة.";
+  }
+  if (error instanceof OpenRouterTokenLimitError) {
+    return "Jarvis: لم يتمكن النموذج من إنتاج إجابة ضمن الميزانية المتاحة. حاول بسؤال أقصر.";
+  }
   if (error instanceof OpenRouterError) {
     return "Jarvis: تعذر الاتصال بمزود الذكاء الاصطناعي. تحقق من الاتصال وحاول مجدداً.";
   }

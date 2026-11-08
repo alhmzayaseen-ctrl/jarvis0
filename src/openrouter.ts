@@ -4,7 +4,10 @@ import { containsSensitiveContent } from "./privacy";
 export const OPENROUTER_FREE_ROUTER = "openrouter/free";
 const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_TIMEOUT_MS = 30_000;
-const MAX_COMPLETION_TOKENS = 256;
+/** Default max completion tokens when JARVIS_MAX_TOKENS is not set. */
+const DEFAULT_MAX_COMPLETION_TOKENS = 2048;
+/** Upper bound for JARVIS_MAX_TOKENS to prevent unreasonable values. */
+const MAX_ALLOWED_COMPLETION_TOKENS = 8192;
 
 export class OpenRouterError extends Error {
   readonly status?: number;
@@ -22,6 +25,8 @@ export class OpenRouterTimeoutError extends OpenRouterError {}
 export class OpenRouterAPIError extends OpenRouterError {}
 export class OpenRouterResponseError extends OpenRouterError {}
 export class OpenRouterSensitiveRequestError extends OpenRouterError {}
+/** Thrown when the model exhausted the token budget before producing any content (finish_reason = "length" and content is absent). */
+export class OpenRouterTokenLimitError extends OpenRouterResponseError {}
 
 export interface OpenRouterProviderOptions {
   timeoutMs?: number;
@@ -33,15 +38,18 @@ export class OpenRouterProvider implements AIProvider {
   readonly #apiKey: string;
   readonly #model: string;
   readonly #timeoutMs: number;
+  readonly #maxTokens: number;
 
   private constructor(
     apiKey: string,
     model: string,
     timeoutMs: number,
+    maxTokens: number,
   ) {
     this.#apiKey = apiKey;
     this.#model = model;
     this.#timeoutMs = timeoutMs;
+    this.#maxTokens = maxTokens;
     Object.freeze(this);
   }
 
@@ -81,7 +89,18 @@ export class OpenRouterProvider implements AIProvider {
       throw new OpenRouterConfigurationError("timeoutMs must be a positive integer.");
     }
 
-    const provider = new OpenRouterProvider(apiKey.trim(), OPENROUTER_FREE_ROUTER, timeoutMs);
+    // Resolve max completion tokens from JARVIS_MAX_TOKENS, falling back to the default.
+    let maxTokens = DEFAULT_MAX_COMPLETION_TOKENS;
+    const rawMaxTokens = process.env.JARVIS_MAX_TOKENS;
+    if (rawMaxTokens !== undefined) {
+      const parsed = Number(rawMaxTokens);
+      if (Number.isInteger(parsed) && parsed > 0 && parsed <= MAX_ALLOWED_COMPLETION_TOKENS) {
+        maxTokens = parsed;
+      }
+      // Invalid values silently fall back to the default.
+    }
+
+    const provider = new OpenRouterProvider(apiKey.trim(), OPENROUTER_FREE_ROUTER, timeoutMs, maxTokens);
     TRUSTED_PROVIDERS.add(provider);
     return provider;
   }
@@ -114,7 +133,7 @@ export class OpenRouterProvider implements AIProvider {
           Authorization: `Bearer ${this.#apiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ model: this.#model, messages, max_tokens: MAX_COMPLETION_TOKENS }),
+        body: JSON.stringify({ model: this.#model, messages, max_tokens: this.#maxTokens }),
         signal: controller.signal,
       });
 
@@ -150,6 +169,12 @@ export class OpenRouterProvider implements AIProvider {
     const firstChoice = Array.isArray(choices) ? asRecord(choices[0]) : undefined;
     const message = asRecord(firstChoice?.message);
     if (typeof message?.content !== "string") {
+      const finishReason = typeof firstChoice?.finish_reason === "string" ? firstChoice.finish_reason : undefined;
+      if (finishReason === "length") {
+        throw new OpenRouterTokenLimitError(
+          "The model exhausted the token budget before producing a completion. The response contains no content.",
+        );
+      }
       throw new OpenRouterResponseError("OpenRouter response did not contain a text completion.");
     }
     return message.content;
