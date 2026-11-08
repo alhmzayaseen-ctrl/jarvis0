@@ -74,10 +74,12 @@ test("blocks sensitive requests when OpenRouter is called directly", async () =>
     provider.complete({ prompt: "My password is never-send-this." }),
     OpenRouterSensitiveRequestError,
   );
-  await assert.rejects(
-    provider.complete({ prompt: "ordinary", privacyLevel: "sensitive" }),
-    OpenRouterSensitiveRequestError,
-  );
+  for (const level of ["sensitive", "SENSITIVE", "sensitive ", " sensitive", " Sensitive "]) {
+    await assert.rejects(
+      provider.complete({ prompt: "ordinary", privacyLevel: level as any }),
+      OpenRouterSensitiveRequestError,
+    );
+  }
   assert.equal(fetchCalls, 0);
 }));
 

@@ -52,7 +52,8 @@ export function enforcePrivacyBoundary(provider: AIProvider): AIProvider {
 
 function isSensitiveRequest(request: AIRequest): boolean {
   return (
-    request.privacyLevel === "sensitive" ||
+    (typeof request.privacyLevel === "string" &&
+      request.privacyLevel.trim().toLowerCase() === "sensitive") ||
     containsSensitiveContent(`${request.prompt}\n${request.context ?? ""}`)
   );
 }

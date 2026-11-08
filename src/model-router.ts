@@ -57,7 +57,8 @@ export class HybridModelRouter implements AIProvider {
   async complete(request: AIRequest): Promise<string> {
     const taskType = request.taskType ?? "general";
     const privacyLevel =
-      request.privacyLevel === "sensitive" ||
+      (typeof request.privacyLevel === "string" &&
+        request.privacyLevel.trim().toLowerCase() === "sensitive") ||
       containsSensitiveContent(`${request.prompt}\n${request.context ?? ""}`)
         ? "sensitive"
         : "normal";

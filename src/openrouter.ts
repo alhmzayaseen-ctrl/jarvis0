@@ -67,7 +67,8 @@ export class OpenRouterProvider implements AIProvider {
 
   async complete(request: AIRequest): Promise<string> {
     if (
-      request.privacyLevel === "sensitive" ||
+      (typeof request.privacyLevel === "string" &&
+        request.privacyLevel.trim().toLowerCase() === "sensitive") ||
       containsSensitiveContent(`${request.prompt}\n${request.context ?? ""}`)
     ) {
       throw new OpenRouterSensitiveRequestError(

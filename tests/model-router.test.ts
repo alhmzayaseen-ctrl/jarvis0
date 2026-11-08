@@ -327,10 +327,13 @@ test("refuses sensitive cloud routing when no local provider is configured", asy
     onRoute: (event) => events.push(event),
   });
 
-  await assert.rejects(
-    router.complete({ prompt: "sensitive", privacyLevel: "sensitive" }),
-    LocalProviderUnavailableError,
-  );
+  const variants = ["sensitive", "SENSITIVE", "sensitive ", " sensitive", " Sensitive "];
+  for (const level of variants) {
+    await assert.rejects(
+      router.complete({ prompt: "sensitive", privacyLevel: level as any }),
+      LocalProviderUnavailableError,
+    );
+  }
   await assert.rejects(
     router.complete({ prompt: "My password is never-send-this." }),
     LocalProviderUnavailableError,
@@ -344,9 +347,32 @@ test("refuses sensitive cloud routing when no local provider is configured", asy
     LocalProviderUnavailableError,
   );
   assert.equal(cloudCalls, 0);
-  assert.equal(events.length, 4);
+  assert.equal(events.length, variants.length + 3);
   assert.ok(events.every(({ provider, success, privacyLevel }) =>
     provider === "none" && !success && privacyLevel === "sensitive"));
+}));
+
+test("normalizes privacyLevel variants across PrivacyGuardProvider and HybridModelRouter", async () => withMockFetch(async () => {
+  let cloudCalls = 0;
+  globalThis.fetch = async () => {
+    cloudCalls += 1;
+    return jsonResponse("cloud-reply");
+  };
+
+  const cloud = makeFreeProvider();
+  const router = new HybridModelRouter({ freeCloudProvider: cloud });
+  const guard = new PrivacyGuardProvider(router);
+
+  for (const level of ["sensitive", "SENSITIVE", "sensitive ", " sensitive", " Sensitive "]) {
+    await assert.rejects(
+      guard.complete({ prompt: "ordinary question", privacyLevel: level as any }),
+      LocalProviderUnavailableError,
+    );
+  }
+
+  const normalReply = await guard.complete({ prompt: "ordinary question", privacyLevel: "normal" });
+  assert.equal(normalReply, "cloud-reply");
+  assert.equal(cloudCalls, 1);
 }));
 
 function makeFreeProvider(): OpenRouterProvider {
