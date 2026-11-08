@@ -205,6 +205,37 @@ test("rejects malformed remember commands without sending them to the provider",
     assert.equal(requestsFor(provider).length, 0);
     assert.deepEqual(await memory.list(), []);
   });
+
+  test("rejects malformed /correct commands without sending them to the provider", async () => {
+    const memory = new MockMemory();
+    const provider = createMockProvider();
+    const service = new ConversationService(provider, memory);
+
+    for (const command of [
+      "/correct",
+      "/correct   ",
+      "/correct key_without_equals",
+      "/correct = value_without_key",
+      "/correct key =",
+    ]) {
+      const result = await service.respond(command);
+      assert.equal(result.memoryStatus, "clarification-needed");
+      assert.match(result.text, /\/correct key = value/);
+    }
+
+    assert.equal(requestsFor(provider).length, 0);
+  });
+
+  test("handles empty LLM responses safely without throwing or crashing", async () => {
+    const memory = new MockMemory();
+    const provider = createMockProvider("");
+    const shortTerm = new ShortTermMemory();
+    const service = new ConversationService(provider, memory, { shortTermMemory: shortTerm });
+
+    const result = await service.respond("Hello, how are you?");
+    assert.equal(result.text, "لم أتلقَّ إجابة صالحة من النموذج.");
+    assert.equal(result.memoryStatus, "none");
+  });
 });
 
 test("retrieves Arabic test-color memory into real conversation context only", async () => {

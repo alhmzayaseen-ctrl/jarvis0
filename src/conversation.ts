@@ -41,10 +41,13 @@ type ExplicitMemoryKind = MemoryKind | "preference";
 type MemoryOperation =
   | { type: "remember"; kind: ExplicitMemoryKind; key: string; value: string }
   | { type: "correct"; key: string; value: string }
+  | { type: "invalid-correct" }
   | { type: "unsupported"; category: string }
   | { type: "invalid-remember" };
 
-export type ConversationMemory = Pick<MemoryStore, "create" | "get" | "search" | "update">;
+export type ConversationMemory = Pick<MemoryStore, "create" | "get" | "search" | "update"> & {
+  delete?: (key: string) => Promise<boolean>;
+};
 
 export type ConversationMemoryStatus =
   | "used"
@@ -118,6 +121,12 @@ export class ConversationService {
     }
 
     const operation = parseMemoryOperation(message);
+    if (operation?.type === "invalid-correct") {
+      return {
+        text: "صيغة التصحيح غير مكتملة. استخدم /correct key = value.",
+        memoryStatus: "clarification-needed",
+      };
+    }
     if (operation?.type === "unsupported") {
       return {
         text: `لم أحفظ ${operation.category}؛ لا تُحفظ المهام أو المعلومات المؤقتة أو الافتراضات كذكريات دائمة.`,
@@ -195,11 +204,12 @@ export class ConversationService {
         memoryStatus: "privacy-blocked",
       };
     }
-    if (!sensitiveMessage) {
+    const effectiveText = text.trim() ? text : "لم أتلقَّ إجابة صالحة من النموذج.";
+    if (!sensitiveMessage && text.trim()) {
       this.shortTermMemory.append(this.sessionId, "assistant", text);
     }
     return {
-      text,
+      text: effectiveText,
       memoryStatus,
       ...(memoryIdsUsed.length > 0
         ? { memoriesUsed: memoryIdsUsed.length, memoryIdsUsed }
@@ -295,13 +305,16 @@ export class ConversationService {
 }
 
 function parseMemoryOperation(message: string): MemoryOperation | undefined {
-  const correct = message.match(/^\/correct\s+([^=\r\n]+?)\s*=\s*([\s\S]+)$/i);
-  if (correct) {
-    return {
-      type: "correct",
-      key: correct[1].trim(),
-      value: correct[2].trim(),
-    };
+  if (/^\/correct\b/i.test(message)) {
+    const correct = message.match(/^\/correct\s+([^=\r\n]+?)\s*=\s*([\s\S]+)$/i);
+    if (correct && correct[1].trim() && correct[2].trim()) {
+      return {
+        type: "correct",
+        key: correct[1].trim(),
+        value: correct[2].trim(),
+      };
+    }
+    return { type: "invalid-correct" };
   }
 
   const unsupported = message.match(/^\/remember\s+(task|temporary|assumption)\s+(.+)$/i);
