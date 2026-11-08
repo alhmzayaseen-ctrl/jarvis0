@@ -1,4 +1,5 @@
 import { WorkingMemory } from "./context";
+import { containsSensitiveContent } from "./privacy";
 import {
   type TaskEventRecord,
   type TaskInput,
@@ -9,6 +10,13 @@ import {
 } from "./memory";
 
 type TaskDetailsUpdate = TaskUpdateInput;
+
+export class TaskPrivacyError extends Error {
+  constructor(message = "Task content contains sensitive or private information.") {
+    super(message);
+    this.name = "TaskPrivacyError";
+  }
+}
 
 const TERMINAL_STATUSES = new Set<TaskStatus>(["completed", "cancelled"]);
 
@@ -28,6 +36,12 @@ export class TaskService {
   async createTask(input: TaskInput): Promise<TaskRecord> {
     if (input.status !== "pending") {
       throw new Error("Tasks must be created with pending status.");
+    }
+    if (
+      containsSensitiveContent(input.title) ||
+      (input.description && containsSensitiveContent(input.description))
+    ) {
+      throw new TaskPrivacyError();
     }
     const task = await this.memoryStore.createTask(input);
     this.currentActiveTaskId = task.id;
@@ -64,11 +78,20 @@ export class TaskService {
     if ("status" in input) {
       throw new Error("Use startTask, completeTask, or cancelTask to change task status.");
     }
+    if (
+      (input.title !== undefined && containsSensitiveContent(input.title)) ||
+      (input.description && containsSensitiveContent(input.description))
+    ) {
+      throw new TaskPrivacyError();
+    }
     // Status changes must use addTaskEvent() so the transition has a durable event.
     return this.memoryStore.updateTask(taskId, input);
   }
 
-  recordProgress(taskId: string, content: string): Promise<TaskEventRecord> {
+  async recordProgress(taskId: string, content: string): Promise<TaskEventRecord> {
+    if (containsSensitiveContent(content)) {
+      throw new TaskPrivacyError();
+    }
     return this.serializeTransition(async () => {
       const task = await this.requireTask(taskId);
       if (TERMINAL_STATUSES.has(task.status)) {
@@ -78,6 +101,7 @@ export class TaskService {
         taskId,
         eventType: "progress",
         content,
+        expectedStatus: task.status,
       });
     });
   }

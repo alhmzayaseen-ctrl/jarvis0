@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { WorkingMemory } from "../src/context";
 import { MemoryStore } from "../src/memory";
-import { TaskService } from "../src/task-service";
+import { TaskPrivacyError, TaskService } from "../src/task-service";
 
 test("creates a task, selects it automatically, and retrieves it", async () => {
   await withTaskService(async ({ service }) => {
@@ -114,6 +114,39 @@ test("records task progress and retrieves its event", async () => {
     assert.equal(event.eventType, "progress");
     assert.equal(event.content, "Reviewed the current implementation");
     assert.deepEqual(await service.listTaskEvents(task.id), [event]);
+  });
+});
+
+test("rejects recording progress with stale status if task changed concurrently", async () => {
+  await withTaskService(async ({ databasePath, memoryStore, service }) => {
+    const task = await service.createTask({ title: "Stale progress check", status: "pending" });
+    const secondStore = await MemoryStore.open(databasePath);
+
+    // Concurrently transition task from pending to in_progress behind service's back
+    let readCount = 0;
+    const originalGetTask = memoryStore.getTask.bind(memoryStore);
+    memoryStore.getTask = async (taskId) => {
+      const result = await originalGetTask(taskId);
+      if (taskId === task.id) {
+        readCount += 1;
+        if (readCount === 1) {
+          // Concurrently update status to in_progress in the second store
+          await secondStore.addTaskEvent({
+            taskId: task.id,
+            eventType: "status_changed",
+            content: "Concurrently started",
+            status: "in_progress",
+            expectedStatus: "pending",
+          });
+        }
+      }
+      return result;
+    };
+
+    await assert.rejects(
+      service.recordProgress(task.id, "New progress after concurrent start"),
+      /Task status changed: expected pending, found in_progress/,
+    );
   });
 });
 
@@ -259,6 +292,109 @@ test("task lifecycle operations do not change long-term memories", async () => {
 
     assert.deepEqual(await memoryStore.get(memory.key), memory);
     assert.deepEqual(await memoryStore.history(memory.key), [{ ...memory, revision: 1 }]);
+  });
+});
+
+test("rejects creating tasks with sensitive titles and descriptions without persisting or changing state", async () => {
+  await withTaskService(async ({ memoryStore, service }) => {
+    let createCalls = 0;
+    const originalCreate = memoryStore.createTask.bind(memoryStore);
+    memoryStore.createTask = async (input) => {
+      createCalls += 1;
+      return originalCreate(input);
+    };
+
+    const sensitiveInputs = [
+      { title: "My password is super-secret-123", status: "pending" as const },
+      { title: "Fix sk-or-v1-abcdef1234567890", status: "pending" as const },
+      { title: "كلمة المرور: سري-للغاية", status: "pending" as const },
+      { title: "Safe title", description: "Diagnosed with depression", status: "pending" as const },
+    ];
+
+    for (const input of sensitiveInputs) {
+      await assert.rejects(
+        service.createTask(input),
+        (error: unknown) => error instanceof TaskPrivacyError,
+      );
+    }
+
+    assert.equal(createCalls, 0);
+    assert.equal(service.activeTaskId, null);
+    assert.equal(await service.getActiveTask(), null);
+  });
+});
+
+test("rejects updating tasks with sensitive title or description", async () => {
+  await withTaskService(async ({ service }) => {
+    const task = await service.createTask({ title: "Safe initial title", status: "pending" });
+
+    await assert.rejects(
+      service.updateTask(task.id, { title: "My API key is sk-or-v1-testkey12345678" }),
+      (error: unknown) => error instanceof TaskPrivacyError,
+    );
+
+    await assert.rejects(
+      service.updateTask(task.id, { description: "Contact me at user@example.com" }),
+      (error: unknown) => error instanceof TaskPrivacyError,
+    );
+
+    const unchanged = await service.getTask(task.id);
+    assert.equal(unchanged?.title, "Safe initial title");
+    assert.equal(unchanged?.description, null);
+  });
+});
+
+test("rejects recording sensitive progress content without adding an event", async () => {
+  await withTaskService(async ({ memoryStore, service }) => {
+    let eventCalls = 0;
+    const originalAddEvent = memoryStore.addTaskEvent.bind(memoryStore);
+    memoryStore.addTaskEvent = async (input) => {
+      eventCalls += 1;
+      return originalAddEvent(input);
+    };
+
+    const task = await service.createTask({ title: "Safe task", status: "pending" });
+
+    await assert.rejects(
+      service.recordProgress(task.id, "My password is secret-progress-value"),
+      (error: unknown) => error instanceof TaskPrivacyError,
+    );
+
+    await assert.rejects(
+      service.recordProgress(task.id, "أعاني من السكري"),
+      (error: unknown) => error instanceof TaskPrivacyError,
+    );
+
+    assert.equal(eventCalls, 0);
+    assert.deepEqual(await service.listTaskEvents(task.id), []);
+  });
+});
+
+test("accepts ordinary non-sensitive technical task titles, descriptions, and progress", async () => {
+  await withTaskService(async ({ service }) => {
+    const task = await service.createTask({
+      title: "Design password input field",
+      description: "Review auth tokens layout and reset form",
+      status: "pending",
+    });
+
+    assert.equal(task.title, "Design password input field");
+    assert.equal(task.description, "Review auth tokens layout and reset form");
+
+    const updated = await service.updateTask(task.id, {
+      title: "Implement login form",
+      description: "Add accessibility labels",
+    });
+
+    assert.equal(updated.title, "Implement login form");
+    assert.equal(updated.description, "Add accessibility labels");
+
+    const event = await service.recordProgress(task.id, "Completed wireframe and markup");
+    assert.equal(event.content, "Completed wireframe and markup");
+
+    const events = await service.listTaskEvents(task.id);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].content, "Completed wireframe and markup");
   });
 });
 

@@ -120,3 +120,55 @@ test("keeps the three-argument runChat call valid and does not forward /task com
   assert.equal(output.some((text) => text.includes("إدارة المهام غير متاحة")), true);
   assert.equal(output.some((text) => text.includes("Ignore after exit")), false);
 });
+
+test("rejects sensitive task creation and sensitive progress recording in CLI with Arabic message", async () => {
+  const databasePath = join(tmpdir(), `jarvis-task-cli-privacy-${randomUUID()}.sqlite`);
+  try {
+    const memoryStore = await MemoryStore.open(databasePath);
+    const taskService = new TaskService(memoryStore);
+    const output: string[] = [];
+    let safeTaskId = "";
+
+    const conversation = {
+      respond: async (_message: string): Promise<ConversationResult> => {
+        return { text: "Conversation response", memoryStatus: "none" };
+      },
+    } as Pick<ConversationService, "respond">;
+
+    const lines = async function* (): AsyncGenerator<string> {
+      yield "/task create My password is super-secret-123";
+      yield "/task create كلمة المرور: سر-للغاية";
+      yield "/task create Safe initial task";
+      safeTaskId = taskService.activeTaskId ?? "";
+      yield "/task progress API key is sk-or-v1-abcdef1234567890";
+      yield "/task progress أعاني من السكري";
+      yield "/task progress Safe progress notes";
+      yield "/exit";
+    };
+
+    await runChat(lines(), conversation, (text) => output.push(text), taskService);
+
+    const privacyRejections = output.filter((text) =>
+      text.includes("لم أحفظ محتوى المهمة لأنه قد يتضمن معلومات حساسة أو سراً."),
+    );
+    assert.equal(privacyRejections.length, 4);
+
+    assert.equal(output.some((text) => text.includes("super-secret-123")), false);
+    assert.equal(output.some((text) => text.includes("سر-للغاية")), false);
+    assert.equal(output.some((text) => text.includes("sk-or-v1-abcdef1234567890")), false);
+
+    assert.equal(output.some((text) => text.includes("تم إنشاء المهمة واختيارها: Safe initial task")), true);
+    assert.equal(output.some((text) => text.includes("تم تسجيل التقدم")), true);
+
+    const safeTask = await taskService.getTask(safeTaskId);
+    assert.equal(safeTask?.title, "Safe initial task");
+
+    const events = await taskService.listTaskEvents(safeTaskId);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].content, "Safe progress notes");
+  } finally {
+    for (const path of [databasePath, `${databasePath}.lock`]) {
+      if (existsSync(path)) unlinkSync(path);
+    }
+  }
+});

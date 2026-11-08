@@ -5,7 +5,7 @@ import { ConversationService, type ConversationResult } from "./conversation";
 import { WorkingMemory } from "./context";
 import { MemoryStore } from "./memory";
 import { HybridModelRouter, type ModelRouteEvent } from "./model-router";
-import { TaskService } from "./task-service";
+import { TaskPrivacyError, TaskService } from "./task-service";
 import {
   OpenRouterConfigurationError,
   OpenRouterError,
@@ -205,6 +205,9 @@ function requireNoTaskArgument(argument: string): void {
 
 function formatTaskCommandError(error: unknown): string {
   if (error instanceof TaskCommandError) return error.message;
+  if (error instanceof TaskPrivacyError) {
+    return "لم أحفظ محتوى المهمة لأنه قد يتضمن معلومات حساسة أو سراً.";
+  }
   if (!(error instanceof Error)) return "تعذر تنفيذ أمر المهمة.";
   if (error.message === "Task not found.") return "المهمة غير موجودة.";
   if (error.message === "Completed or cancelled tasks cannot be selected as active.") {
