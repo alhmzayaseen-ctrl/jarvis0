@@ -10,3 +10,11 @@ jarvis.sqlite
 
 .continue/
 *.vsix
+
+# Local AI tool histories
+.aider.chat.history.md
+.aider.input.history
+
+# Runtime lock and pending files
+*.lock
+*.pending
