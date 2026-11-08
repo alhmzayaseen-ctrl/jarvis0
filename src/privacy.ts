@@ -1,5 +1,8 @@
 const SENSITIVE_PATTERNS = [
   /\b(?:sk-or-v1-[a-z0-9_-]{12,}|sk-[a-z0-9_-]{16,})\b/i,
+  /\bAKIA[0-9A-Z]{16}\b/,
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,255}\b|\bgithub_pat_[A-Za-z0-9_]{80,255}\b/,
+  /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/,
   /\b(?:my\s+)?(?:password|passphrase|api[ _-]?key|secret|access token|refresh token)\s*(?:is|[:=])\s*\S+/i,
   /\b(?:diagnosis|disease|medication|prescription|symptom|therapy|pregnan(?:t|cy)|diabetes|asthma|cancer|depression|hiv)\b|\b(?:i|we)\s+(?:am|are|was|were|have been)\s+diagnosed\b/i,
   /\b(?:bank account|credit card|debit card|social security|passport number|national id|home address|precise location|religion|political views|sexual orientation|ethnicity|race|criminal record|immigration status|disability|addiction|abuse|trauma|biometric)\b/i,
@@ -13,7 +16,7 @@ const SENSITIVE_PATTERNS = [
 ];
 
 const LOCAL_PHONE_DISCLOSURE =
-  /(?:(?:\b(?:my\s+)?(?:phone|telephone|mobile|cell(?:ular)?(?:\s+phone)?)(?:\s+number)?\b|\b(?:mijn\s+)?(?:telefoonnummer|mobiel(?:e)?(?:\s+nummer)?|gsm-nummer)\b)|(?<![\p{L}\p{N}])(?:رقم\s+(?:هاتفي|الهاتف|الجوال|تلفوني)|(?:هاتفي|جوالي|تلفوني)\s+رقم)(?![\p{L}\p{N}]))\s*(?:(?:is|[:=،,؛])\s*)?(\(?\d[\d ().-]{5,}\d\)?)/iu;
+  /(?:(?:\b(?:my\s+)?(?:phone|telephone|mobile|cell(?:ular)?(?:\s+phone)?)(?:\s+number)?\b|\b(?:mijn\s+)?(?:telefoonnummer|mobiel(?:e)?(?:\s+nummer)?|gsm-nummer)\b)|(?<![\p{L}\p{N}])(?:رقم\s+(?:هاتفي|الهاتف|الجوال|تلفوني)|(?:هاتفي|جوالي|تلفوني)\s+رقم)(?![\p{L}\p{N}]))\s*(?:(?:is|[:=،,؛])\s*)?(\(?\d[\d ().-]{5,}\d\)?)/giu;
 
 export function containsSensitiveContent(value: string): boolean {
   const normalized = value
@@ -29,8 +32,11 @@ export function containsSensitiveContent(value: string): boolean {
 
   if (SENSITIVE_PATTERNS.some((pattern) => pattern.test(normalized))) return true;
 
-  const phoneMatch = LOCAL_PHONE_DISCLOSURE.exec(normalized);
-  if (!phoneMatch) return false;
-  const digitCount = phoneMatch[1].replace(/\D/gu, "").length;
-  return digitCount >= 7 && digitCount <= 15;
+  LOCAL_PHONE_DISCLOSURE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = LOCAL_PHONE_DISCLOSURE.exec(normalized)) !== null) {
+    const digitCount = match[1].replace(/\D/gu, "").length;
+    if (digitCount >= 7 && digitCount <= 15) return true;
+  }
+  return false;
 }

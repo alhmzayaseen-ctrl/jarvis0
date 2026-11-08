@@ -18,6 +18,22 @@ test("detects credentials and health disclosures in English, Dutch, and Arabic",
   }
 });
 
+test("detects cloud credentials, API tokens, and private keys", () => {
+  const secretExamples = [
+    "Deploy using AKIAIOSFODNN7EXAMPLE today",
+    "Here is the token: ghp_1234567890abcdefghijklmnopqrstuvwxyzAB",
+    "Use gho_1234567890abcdefghijklmnopqrstuvwxyzAB for oauth",
+    "github_pat_11AAAAAAA01234567890abcdefghijklmnopqrstuvwxyz_ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890ab",
+    "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBAgwggQEAgEAAoIBAQC...\n-----END PRIVATE KEY-----",
+    "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAz...",
+    "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEI...",
+  ];
+
+  for (const example of secretExamples) {
+    assert.equal(containsSensitiveContent(example), true, example);
+  }
+});
+
 test("detects sensitive identifiers and personal data", () => {
   const sensitiveExamples = [
     "Contact me at user@example.com",
@@ -36,6 +52,7 @@ test("detects local phone numbers in English, Dutch, and Arabic", () => {
     "Mijn mobiele nummer is 06-1234 5678",
     "رقم هاتفي: 050 123 4567",
     "رقم الجوال (٠٥٠) ١٢٣-٤٥٦٧",
+    "My phone number is 123456789012345678 and my cell is (202) 555-0142",
   ];
 
   for (const example of sensitiveExamples) {
@@ -88,6 +105,10 @@ test("does not classify ordinary messages or contextual mentions as disclosures"
     "حمل الحقيبة إلى السيارة كان متعباً.",
     "نتحدث عن المرض في الأدب بشكل عام.",
     "هذا طبيعي، وتحمّل الفريق مسؤولية المهمة.",
+    "The project was inspired by AKIA principles of architecture.",
+    "Here is the github repo name: my-project-ghp-tools.",
+    "The SSH public key is ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC...",
+    "Check out https://github.com/org/repo for details.",
   ];
 
   for (const example of ordinaryExamples) {
