@@ -13,6 +13,7 @@ import {
   OpenRouterTokenLimitError,
 } from "./openrouter";
 import type { AIProvider } from "./provider";
+import type { EmbeddingProvider } from "./embedding";
 
 export const DEFAULT_MEMORY_PATH = process.env.JARVIS_DB_PATH
   ? resolve(process.env.JARVIS_DB_PATH)
@@ -22,29 +23,36 @@ export interface ChatDependencies {
   memoryPath?: string;
   createProvider?: () => AIProvider;
   onRoute?: (event: ModelRouteEvent) => void;
-  openMemory?: (path: string) => Promise<ConstructorParameters<typeof ConversationService>[1]>;
+  openMemory?: (path: string, options?: { embeddingProvider?: EmbeddingProvider }) => Promise<ConstructorParameters<typeof ConversationService>[1]>;
+  embeddingProvider?: EmbeddingProvider;
 }
 
 export interface ChatServicesDependencies {
   memoryPath?: string;
   createProvider?: () => AIProvider;
   onRoute?: (event: ModelRouteEvent) => void;
-  openTaskStore?: (path: string) => Promise<MemoryStore>;
+  openTaskStore?: (path: string, options?: { embeddingProvider?: EmbeddingProvider }) => Promise<MemoryStore>;
   workingMemory?: WorkingMemory;
+  embeddingProvider?: EmbeddingProvider;
 }
 
 export interface ChatServices {
   conversationService: ConversationService;
   taskService: TaskService;
   workingMemory: WorkingMemory;
+  memoryStore?: MemoryStore;
 }
 
 export async function createChatService(
   dependencies: ChatDependencies = {},
 ): Promise<ConversationService> {
   const provider = createRoutedProvider(dependencies);
-  const memory = await (dependencies.openMemory ?? ((path) => MemoryStore.open(path)))(
+  const memory = await (
+    dependencies.openMemory ??
+    ((path, options) => MemoryStore.open(path, options))
+  )(
     dependencies.memoryPath ?? DEFAULT_MEMORY_PATH,
+    dependencies.embeddingProvider ? { embeddingProvider: dependencies.embeddingProvider } : undefined,
   );
   return new ConversationService(provider, memory);
 }
@@ -53,8 +61,12 @@ export async function createChatServices(
   dependencies: ChatServicesDependencies = {},
 ): Promise<ChatServices> {
   const provider = createRoutedProvider(dependencies);
-  const memoryStore = await (dependencies.openTaskStore ?? ((path) => MemoryStore.open(path)))(
+  const memoryStore = await (
+    dependencies.openTaskStore ??
+    ((path, options) => MemoryStore.open(path, options))
+  )(
     dependencies.memoryPath ?? DEFAULT_MEMORY_PATH,
+    dependencies.embeddingProvider ? { embeddingProvider: dependencies.embeddingProvider } : undefined,
   );
   const workingMemory = dependencies.workingMemory ?? new WorkingMemory();
   const taskService = new TaskService(memoryStore, workingMemory);
@@ -63,7 +75,7 @@ export async function createChatServices(
     getTaskId: () => taskService.activeTaskId,
   });
 
-  return { conversationService, taskService, workingMemory };
+  return { conversationService, taskService, workingMemory, memoryStore };
 }
 
 function createRoutedProvider(

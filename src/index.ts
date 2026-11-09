@@ -1,6 +1,8 @@
 export * from "./chat";
 export * from "./context";
 export * from "./conversation";
+export * from "./embedding";
+export * from "./embedding_identity";
 export * from "./evaluation";
 export * from "./memory";
 export * from "./model-router";
@@ -8,4 +10,6 @@ export * from "./openrouter";
 export * from "./privacy";
 export * from "./privacy-provider";
 export * from "./provider";
+export * from "./reindex";
+export * from "./task-service";
 export * from "./tool";

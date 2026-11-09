@@ -398,6 +398,29 @@ test("accepts ordinary non-sensitive technical task titles, descriptions, and pr
   });
 });
 
+test("T-1 regression: serializes createTask with concurrent task selection and completion on activeTaskId", async () => {
+  await withTaskService(async ({ service }) => {
+    const first = await service.createTask({ title: "First task", status: "pending" });
+    await service.startTask(first.id);
+    assert.equal(service.activeTaskId, first.id);
+
+    const [second] = await Promise.all([
+      service.createTask({ title: "Second task", status: "pending" }),
+      service.selectActiveTask(first.id),
+      service.completeTask(first.id),
+    ]);
+
+    // Because createTask(second) was queued first, followed by selectActiveTask(first) and completeTask(first),
+    // completeTask(first) clears activeTaskId when first was selected, rather than createTask(second)
+    // racing out-of-order after completeTask(first).
+    assert.equal(service.activeTaskId, null);
+
+    const active = await service.selectActiveTask(second.id);
+    assert.equal(active.id, second.id);
+    assert.equal(service.activeTaskId, second.id);
+  });
+});
+
 interface TestDependencies {
   databasePath: string;
   memoryStore: MemoryStore;

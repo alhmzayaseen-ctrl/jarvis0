@@ -115,3 +115,34 @@ test("does not classify ordinary messages or contextual mentions as disclosures"
     assert.equal(containsSensitiveContent(example), false, example);
   }
 });
+
+test("P-1 regression: eliminates technical false positives while preserving sensitive personal and credential detections", () => {
+  const technicalNonSensitiveExamples = [
+    "Fix the race condition in lock acquisition",
+    "Resolve data race and stale-lock race in SQLite writer",
+    "Prevent API rate limit abuse in production",
+    "Add quota abuse detection for public endpoints",
+    "Clone git@github.com:org/jarvis-core.git over SSH",
+    "Clone ssh://git@gitlab.com/org/jarvis-core.git",
+    "خطة هجرة قاعدة البيانات المحلية",
+    "تنفيذ هجرة البيانات والمخطط بنجاح",
+    "Refactor SQLite indexing batch loop",
+  ];
+
+  for (const example of technicalNonSensitiveExamples) {
+    assert.equal(containsSensitiveContent(example), false, example);
+  }
+
+  const trueSensitiveDisclosures = [
+    "sk-or-v1-abcdef0123456789",
+    "My race and ethnicity are private",
+    "She reported domestic abuse to the clinic",
+    "Contact me at developer@github.com",
+    "ما هي حالة الهجرة الخاصة بي؟",
+    "أعاني من مشاكل هجرة وإقامة",
+  ];
+
+  for (const example of trueSensitiveDisclosures) {
+    assert.equal(containsSensitiveContent(example), true, example);
+  }
+});

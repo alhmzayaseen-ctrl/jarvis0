@@ -43,9 +43,11 @@ export class TaskService {
     ) {
       throw new TaskPrivacyError();
     }
-    const task = await this.memoryStore.createTask(input);
-    this.currentActiveTaskId = task.id;
-    return task;
+    return this.serializeTransition(async () => {
+      const task = await this.memoryStore.createTask(input);
+      this.currentActiveTaskId = task.id;
+      return task;
+    });
   }
 
   getTask(taskId: string): Promise<TaskRecord | null> {
