@@ -356,6 +356,165 @@ test("saves only explicitly requested preferences with a user-provided provenanc
   assert.equal(requestsFor(provider).length, 0);
 });
 
+test("P-2 regression: corrects saved preferences with /correct preference <key> = <value>", async () => {
+  const memory = new MockMemory();
+  const provider = createMockProvider();
+  const service = new ConversationService(provider, memory);
+
+  // 1. Save new preference
+  const saveResult = await service.respond("/remember preference lang = ar");
+  assert.equal(saveResult.memoryStatus, "saved");
+  assert.equal(memory.records.get("preference:lang")?.value, "ar");
+  assert.equal(memory.records.size, 1);
+
+  // 2. Correct preference using symmetrical /correct preference syntax
+  const correctResult = await service.respond("/correct preference lang = nl");
+  assert.equal(correctResult.memoryStatus, "corrected");
+  assert.match(correctResult.text, /preference:lang/);
+
+  // 3. Verify key is preserved without duplicate entries
+  const record = memory.records.get("preference:lang");
+  assert.ok(record, "preference:lang must remain stored");
+  assert.equal(record?.value, "nl");
+  assert.equal(record?.version, 2);
+  assert.equal(memory.records.has("lang"), false, "must not create a duplicate key named lang");
+  assert.equal(memory.records.size, 1, "memory table must have exactly 1 record");
+
+  // 4. Verify revision history is properly tracked
+  const revisions = memory.revisions.get("preference:lang");
+  assert.equal(revisions?.length, 2);
+  assert.equal(revisions?.[0].value, "ar");
+  assert.equal(revisions?.[1].value, "nl");
+
+  // 5. Correct preference using short form /correct <key> = <value> fallback
+  const shortCorrection = await service.respond("/correct lang = en");
+  assert.equal(shortCorrection.memoryStatus, "corrected");
+  assert.equal(memory.records.get("preference:lang")?.value, "en");
+  assert.equal(memory.records.size, 1);
+  assert.equal(memory.revisions.get("preference:lang")?.length, 3);
+});
+
+test("P-2 regression: normal memory keys and invalid syntax handling in /correct", async () => {
+  const memory = new MockMemory();
+  const provider = createMockProvider();
+  const service = new ConversationService(provider, memory);
+
+  // Normal memory creation and correction
+  await service.respond("/remember fact city = Amsterdam");
+  await service.respond("/remember role = engineer");
+
+  const correctCity = await service.respond("/correct fact city = Rotterdam");
+  assert.equal(correctCity.memoryStatus, "corrected");
+  assert.equal(memory.records.get("city")?.value, "Rotterdam");
+
+  const correctRole = await service.respond("/correct role = lead");
+  assert.equal(correctRole.memoryStatus, "corrected");
+  assert.equal(memory.records.get("role")?.value, "lead");
+
+  // Reject malformed preference correction commands
+  for (const invalid of [
+    "/correct preference",
+    "/correct preference =",
+    "/correct preference = value",
+    "/correct preference lang =",
+    "/correct fact =",
+  ]) {
+    const res = await service.respond(invalid);
+    assert.equal(res.memoryStatus, "clarification-needed");
+    assert.match(res.text, /\/correct key = value/);
+  }
+});
+
+test("P-2 regression: coexistence of regular fact and preference with same base name", async () => {
+  const memory = new MockMemory();
+  const provider = createMockProvider();
+  const service = new ConversationService(provider, memory);
+
+  // 1. Save normal fact 'lang' and preference 'preference:lang'
+  const factSave = await service.respond("/remember fact lang = TypeScript");
+  assert.equal(factSave.memoryStatus, "saved");
+  const prefSave = await service.respond("/remember preference lang = Arabic");
+  assert.equal(prefSave.memoryStatus, "saved");
+
+  assert.equal(memory.records.size, 2);
+  assert.equal(memory.records.get("lang")?.value, "TypeScript");
+  assert.equal(memory.records.get("preference:lang")?.value, "Arabic");
+
+  // 2. Correct normal fact using '/correct lang = Go'
+  const factCorrection = await service.respond("/correct lang = Go");
+  assert.equal(factCorrection.memoryStatus, "corrected");
+  assert.equal(memory.records.get("lang")?.value, "Go");
+  assert.equal(memory.records.get("preference:lang")?.value, "Arabic", "preference must remain untouched");
+
+  // 3. Correct preference using '/correct preference lang = Dutch'
+  const prefCorrection = await service.respond("/correct preference lang = Dutch");
+  assert.equal(prefCorrection.memoryStatus, "corrected");
+  assert.equal(memory.records.get("preference:lang")?.value, "Dutch");
+  assert.equal(memory.records.get("lang")?.value, "Go", "regular fact must remain untouched");
+
+  // Verify versions and total records
+  assert.equal(memory.records.size, 2);
+  assert.equal(memory.records.get("lang")?.version, 2);
+  assert.equal(memory.records.get("preference:lang")?.version, 2);
+});
+
+test("P-2 regression: saves and corrects goals and projects without duplicates", async () => {
+  const memory = new MockMemory();
+  const provider = createMockProvider();
+  const service = new ConversationService(provider, memory);
+
+  // 1. Goal: save and correct
+  const goalSave = await service.respond("/remember goal launch = Q1");
+  assert.equal(goalSave.memoryStatus, "saved");
+  assert.equal(memory.records.get("launch")?.kind, "goal");
+  assert.equal(memory.records.get("launch")?.value, "Q1");
+
+  const goalCorrection = await service.respond("/correct goal launch = Q2");
+  assert.equal(goalCorrection.memoryStatus, "corrected");
+  assert.equal(memory.records.get("launch")?.value, "Q2");
+  assert.equal(memory.records.get("launch")?.version, 2);
+
+  // 2. Project: save and correct
+  const projectSave = await service.respond("/remember project jarvis = active");
+  assert.equal(projectSave.memoryStatus, "saved");
+  assert.equal(memory.records.get("jarvis")?.kind, "project");
+  assert.equal(memory.records.get("jarvis")?.value, "active");
+
+  const projectCorrection = await service.respond("/correct project jarvis = maintenance");
+  assert.equal(projectCorrection.memoryStatus, "corrected");
+  assert.equal(memory.records.get("jarvis")?.value, "maintenance");
+  assert.equal(memory.records.get("jarvis")?.version, 2);
+
+  // Verify total count and revision histories
+  assert.equal(memory.records.size, 2);
+  assert.equal(memory.revisions.get("launch")?.length, 2);
+  assert.equal(memory.revisions.get("jarvis")?.length, 2);
+});
+
+test("P-2 regression: handles literal key named 'preference' as a fact", async () => {
+  const memory = new MockMemory();
+  const provider = createMockProvider();
+  const service = new ConversationService(provider, memory);
+
+  // 1. Save fact whose key is 'preference'
+  const saveResult = await service.respond("/remember fact preference = high");
+  assert.equal(saveResult.memoryStatus, "saved");
+  assert.equal(memory.records.get("preference")?.kind, "fact");
+  assert.equal(memory.records.get("preference")?.value, "high");
+  assert.equal(memory.records.size, 1);
+
+  // 2. Correct it with '/correct fact preference = low'
+  const correctResult = await service.respond("/correct fact preference = low");
+  assert.equal(correctResult.memoryStatus, "corrected");
+  assert.equal(memory.records.get("preference")?.value, "low");
+  assert.equal(memory.records.get("preference")?.version, 2);
+
+  // Ensure no side-car key like 'preference:preference' was created
+  assert.equal(memory.records.has("preference:preference"), false);
+  assert.equal(memory.records.size, 1);
+  assert.equal(memory.revisions.get("preference")?.length, 2);
+});
+
 test("does not save uncertain claims, assumptions, or ordinary conversation automatically", async () => {
   const memory = new MockMemory();
   const provider = createMockProvider();

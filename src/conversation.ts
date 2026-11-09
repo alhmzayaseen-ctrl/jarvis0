@@ -280,7 +280,15 @@ export class ConversationService {
     }
 
     try {
-      const current = await this.memory.get(operation.key);
+      let current = await this.memory.get(operation.key);
+      let targetKey = operation.key;
+      if (!current && !operation.key.startsWith("preference:")) {
+        const pref = await this.memory.get(`preference:${operation.key}`);
+        if (pref) {
+          current = pref;
+          targetKey = `preference:${operation.key}`;
+        }
+      }
       if (!current) {
         return {
           text: "لم أجد معلومة حالية بهذا المفتاح لتصحيحها. احفظها أولاً أو تحقق من المفتاح.",
@@ -293,7 +301,7 @@ export class ConversationService {
         value: operation.value,
         provenance: "Explicitly corrected by the user",
       };
-      await this.memory.update(operation.key, current.version, correction);
+      await this.memory.update(targetKey, current.version, correction);
       return {
         text: `صُححت المعلومة «${current.key}»، وأُبقيت نسختها السابقة في السجل.`,
         memoryStatus: "corrected",
@@ -314,10 +322,22 @@ function parseMemoryOperation(message: string): MemoryOperation | undefined {
   if (/^\/correct\b/i.test(message)) {
     const correct = message.match(/^\/correct\s+([^=\r\n]+?)\s*=\s*([\s\S]+)$/i);
     if (correct && correct[1].trim() && correct[2].trim()) {
+      const left = correct[1].trim();
+      const value = correct[2].trim();
+      const firstWord = left.split(/\s+/, 1)[0].toLowerCase();
+      if (["fact", "preference", "goal", "project", "decision"].includes(firstWord)) {
+        const key = left.slice(firstWord.length).trim();
+        if (!key) return { type: "invalid-correct" };
+        return {
+          type: "correct",
+          key: firstWord === "preference" ? `preference:${key}` : key,
+          value,
+        };
+      }
       return {
         type: "correct",
-        key: correct[1].trim(),
-        value: correct[2].trim(),
+        key: left,
+        value,
       };
     }
     return { type: "invalid-correct" };
