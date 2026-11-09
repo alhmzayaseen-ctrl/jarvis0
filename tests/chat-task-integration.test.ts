@@ -120,6 +120,47 @@ test("uses the task snapshot in fallback and continues normally with no active t
   });
 });
 
+test("preserves task snapshot in fallback even if task is completed concurrently and working memory cleared", async () => {
+  await withChatServices(async ({ runtime, memoryStore, requests, workingMemory }) => {
+    const first = await runtime.taskService.createTask({ title: "Completed fallback task", status: "pending" });
+    await runtime.taskService.startTask(first.id);
+    workingMemory.set(first.id, "step", "TASK_ONE_FALLBACK_SNAPSHOT");
+    const second = await runtime.taskService.createTask({ title: "Second active task", status: "pending" });
+    workingMemory.set(second.id, "step", "TASK_TWO_CONCURRENT_DATA");
+    await runtime.taskService.selectActiveTask(first.id);
+
+    let signalSearchStarted!: () => void;
+    let releaseSearch!: () => void;
+    const searchStarted = new Promise<void>((resolve) => { signalSearchStarted = resolve; });
+    const blockedSearch = new Promise<void>((resolve) => { releaseSearch = resolve; });
+    const search = memoryStore.search.bind(memoryStore);
+    let failNextSearch = true;
+    memoryStore.search = async (query, limit) => {
+      if (failNextSearch) {
+        failNextSearch = false;
+        signalSearchStarted();
+        await blockedSearch;
+        throw new Error("simulated database failure during search");
+      }
+      return search(query, limit);
+    };
+
+    const inFlightResponse = runtime.conversationService.respond("Execute step in current task context.");
+    await searchStarted;
+    await runtime.taskService.selectActiveTask(second.id);
+    await runtime.taskService.completeTask(first.id);
+    assert.equal(workingMemory.get(first.id, "step"), undefined);
+
+    releaseSearch();
+    const result = await inFlightResponse;
+    const capturedContext = requests[0].messages.find(({ role }) => role === "system")?.content ?? "";
+
+    assert.equal(result.memoryStatus, "unavailable");
+    assert.match(capturedContext, /TASK_ONE_FALLBACK_SNAPSHOT/);
+    assert.doesNotMatch(capturedContext, /TASK_TWO_CONCURRENT_DATA/);
+  });
+});
+
 interface RuntimeHarness {
   runtime: Awaited<ReturnType<typeof createChatServices>>;
   memoryStore: MemoryStore;

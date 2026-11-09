@@ -596,6 +596,17 @@ test("enforces configured maxContextChars in fallback when memory retrieval fail
   );
 });
 
+test("rejects context character limit too small for base instructions and fallback notice", () => {
+  const provider = createMockProvider();
+  assert.throws(
+    () =>
+      new ConversationService(provider, new MockMemory(), {
+        maxContextChars: 400,
+      }),
+    /Context character limit must be an integer of at least/,
+  );
+});
+
 test("keeps working memory task-isolated when memory retrieval fails", async () => {
   const memory = new MockMemory();
   memory.searchFailure = new Error("local database unavailable");

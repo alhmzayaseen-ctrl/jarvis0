@@ -94,6 +94,12 @@ export class ConversationService {
     ) {
       throw new Error("ConversationService requires a trusted OpenRouter routing boundary.");
     }
+    if (options.maxContextChars !== undefined) {
+      const minChars = SYSTEM_CONTEXT.length + 64;
+      if (!Number.isInteger(options.maxContextChars) || options.maxContextChars < minChars) {
+        throw new Error(`Context character limit must be an integer of at least ${minChars}.`);
+      }
+    }
     this.sessionId = options.sessionId ?? randomUUID();
     this.shortTermMemory = options.shortTermMemory ?? new ShortTermMemory();
     this.contextBuilder = options.contextBuilder ?? new TaskContextBuilder();
